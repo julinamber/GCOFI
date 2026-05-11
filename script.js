@@ -1499,7 +1499,7 @@ async function renderStudentView(root, menu) {
     await loadCounselors();
     const todayIso = new Date().toISOString().slice(0, 10);
     const slotOptions = [
-      { value: "08:15", label: "08:15 AM - 08:55 AM" },
+      { value: "07:30", label: "07:30 AM - 08:30 AM" },
       { value: "09:00", label: "09:00 AM - 10:00 AM" },
       { value: "10:30", label: "10:30 AM - 11:30 AM" },
       { value: "13:00", label: "01:00 PM - 02:00 PM" },
