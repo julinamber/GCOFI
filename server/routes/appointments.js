@@ -3,6 +3,11 @@ const { getPool } = require("../config/db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { sendAppointmentEmail } = require("../services/gmailService");
 const { syncAppointmentToSheet } = require("../services/sheetsService");
+const {
+  validateStudentBooking,
+  appointmentsConflict,
+  blocksInterval
+} = require("../config/counselorBooking");
 
 const router = express.Router();
 
@@ -54,11 +59,7 @@ router.post("/", requireRole("student"), async (req, res) => {
     return res.status(400).json({ message: "Missing required booking fields" });
   }
 
-  const allowedStartTimes = new Set(["07:30", "09:00", "10:30", "13:00", "14:30"]);
   const timeHHMM = String(time).slice(0, 5);
-  if (!allowedStartTimes.has(timeHHMM)) {
-    return res.status(400).json({ message: "Invalid time slot. Please choose an available slot." });
-  }
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -67,14 +68,25 @@ router.post("/", requireRole("student"), async (req, res) => {
   if (requestedDate < today) return res.status(400).json({ message: "Cannot book past dates." });
 
   const db = getPool();
-  const sessionEnd = (() => {
-    const [h, m] = timeHHMM.split(":").map(Number);
-    const startMin = h * 60 + m;
-    const endMin = startMin + 60;
-    const eh = String(Math.floor(endMin / 60)).padStart(2, "0");
-    const em = String(endMin % 60).padStart(2, "0");
-    return `${eh}:${em}:00`;
-  })();
+  const [counselorRows] = await db.query(
+    "SELECT id, full_name AS fullName, email FROM users WHERE id = ? AND role = 'counselor' AND is_active = 1 AND email_verified = 1",
+    [counselorId]
+  );
+  const counselorRow = counselorRows[0];
+  if (!counselorRow) {
+    return res.status(400).json({ message: "Invalid or inactive counselor." });
+  }
+
+  const bookingCheck = validateStudentBooking(
+    { fullName: counselorRow.fullName, email: counselorRow.email },
+    { date, timeHHMM, serviceType }
+  );
+  if (!bookingCheck.ok) {
+    return res.status(400).json({ message: bookingCheck.message });
+  }
+
+  const sessionMinutes = bookingCheck.sessionMinutes;
+  const sessionEnd = bookingCheck.sessionEndHHMMSS;
   const [blocked] = await db.query(
     `SELECT id, start_time, end_time FROM counselor_unavailabilities
      WHERE counselor_id = ? AND unavailable_date = ?`,
@@ -84,7 +96,7 @@ router.post("/", requireRole("student"), async (req, res) => {
     if (!row.start_time && !row.end_time) return true;
     const blockStart = row.start_time ? String(row.start_time).slice(0, 8) : "00:00:00";
     const blockEnd = row.end_time ? String(row.end_time).slice(0, 8) : "23:59:59";
-    return `${timeHHMM}:00` < blockEnd && sessionEnd > blockStart;
+    return blocksInterval(timeHHMM, sessionMinutes, sessionEnd, blockStart, blockEnd);
   });
   if (conflictingBlock) {
     return res.status(409).json({ message: "Counselor is unavailable for the selected date/time." });
@@ -92,26 +104,28 @@ router.post("/", requireRole("student"), async (req, res) => {
 
   // Conflict rule: 1 hour session + 30 minute grace period => 90 minute block
   const [existing] = await db.query(
-    `SELECT appointment_time
+    `SELECT appointment_time, COALESCE(session_duration_minutes, 60) AS session_duration_minutes
      FROM appointments
      WHERE counselor_id = ? AND appointment_date = ?
        AND status IN ('pending','accepted')`,
     [counselorId, date]
   );
-  const toMinutes = (hhmm) => {
-    const [h, m] = hhmm.split(":").map(Number);
-    return h * 60 + m;
-  };
-  const newStart = toMinutes(timeHHMM);
-  const conflict = existing.some((row) => Math.abs(toMinutes(String(row.appointment_time).slice(0, 5)) - newStart) < 90);
+  const conflict = existing.some((row) =>
+    appointmentsConflict(
+      timeHHMM,
+      sessionMinutes,
+      String(row.appointment_time).slice(0, 5),
+      Number(row.session_duration_minutes) || 60
+    )
+  );
   if (conflict) return res.status(409).json({ message: "Selected slot is no longer available" });
 
   const bookingCode = `APT-${Date.now().toString().slice(-6)}`;
   const [result] = await db.query(
     `INSERT INTO appointments
-     (booking_code, student_id, counselor_id, service_type, reason, year_level, college, appointment_date, appointment_time, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-    [bookingCode, req.user.id, counselorId, serviceType, reason || null, yearLevel, college, date, timeHHMM]
+     (booking_code, student_id, counselor_id, service_type, reason, year_level, college, appointment_date, appointment_time, session_duration_minutes, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    [bookingCode, req.user.id, counselorId, serviceType, reason || null, yearLevel, college, date, timeHHMM, sessionMinutes]
   );
 
   await db.query("INSERT INTO audit_logs (actor_id, action, meta) VALUES (?, ?, ?)", [
