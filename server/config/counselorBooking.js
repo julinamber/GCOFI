@@ -60,7 +60,7 @@ const PROFILE_RULES = [
       slotStepMinutes: 15,
       windows: [
         { start: "08:15", end: "09:35" },
-        { start: "01:00", end: "03:00" }
+        { start: "13:00", end: "15:00" }
       ]
     }
   },
