@@ -299,7 +299,16 @@ function clearAuthProvidersCache() {
 }
 
 async function api(path, options = {}) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  const headers = { ...(options.headers || {}) };
+  const method = String(options.method || "GET").toUpperCase();
+  const hasBody = options.body !== undefined && options.body !== null && options.body !== "";
+  const useJsonContentType =
+    hasBody ||
+    method === "PATCH" ||
+    method === "PUT";
+  if (useJsonContentType && !headers["Content-Type"] && !headers["content-type"]) {
+    headers["Content-Type"] = "application/json";
+  }
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   let response;
   try {
@@ -308,7 +317,13 @@ async function api(path, options = {}) {
     throw new Error("Cannot reach API. Open the app via http://localhost:3000 (not file://).");
   }
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || "Request failed");
+  if (!response.ok) {
+    const detail =
+      (data && data.message) ||
+      response.statusText ||
+      (response.status ? `HTTP ${response.status}` : "Request failed");
+    throw new Error(detail);
+  }
   return data;
 }
 
@@ -674,10 +689,10 @@ function renderDashboard(role) {
   };
 
   document.getElementById("roleDashboardLabel").textContent = state.user?.name || "User";
-  const sidebarMeta = document.getElementById("sidebarUserMeta");
-  if (sidebarMeta) {
-    sidebarMeta.textContent = `${state.user?.email || ""} · ${role}`;
-  }
+  const sidebarEmail = document.getElementById("sidebarUserEmail");
+  const sidebarRoleLine = document.getElementById("sidebarUserRole");
+  if (sidebarEmail) sidebarEmail.textContent = state.user?.email || "";
+  if (sidebarRoleLine) sidebarRoleLine.textContent = role || "";
   const sidebarDesc = document.getElementById("sidebarRoleDesc");
   if (sidebarDesc) sidebarDesc.textContent = roleDescriptions[role] || "";
   refreshSidebarIdentity();
@@ -721,6 +736,10 @@ async function refreshSidebarIdentity() {
     state.user = { ...(state.user || {}), name: me.name, email: me.email, role: me.role };
     localStorage.setItem("gco_user", JSON.stringify(state.user));
     label.textContent = me.name || "User";
+    const emailEl = document.getElementById("sidebarUserEmail");
+    const roleEl = document.getElementById("sidebarUserRole");
+    if (emailEl) emailEl.textContent = me.email || "";
+    if (roleEl) roleEl.textContent = me.role || "";
     const initials = String(me.name || "U")
       .split(" ")
       .filter(Boolean)
@@ -737,6 +756,10 @@ async function refreshSidebarIdentity() {
       avatarFallback.classList.remove("hidden");
     }
   } catch (_err) {
+    const emailEl = document.getElementById("sidebarUserEmail");
+    const roleEl = document.getElementById("sidebarUserRole");
+    if (emailEl) emailEl.textContent = state.user?.email || "";
+    if (roleEl) roleEl.textContent = state.user?.role || "";
     const initials = String(state.user?.name || "U")
       .split(" ")
       .filter(Boolean)
@@ -1029,28 +1052,93 @@ async function renderCounselorCalendar(root) {
   };
 }
 
-function renderRecentActivity(items) {
+function renderRecentActivity(items, opts = {}) {
+  const { dismissable = false } = opts;
   const rows = (items || []).slice(0, 8);
   if (!rows.length) return "<p class='muted'>No recent activity.</p>";
   return `<div class="stack-sm">${rows
     .map((n) => {
       const unreadCls = n.is_read ? "" : " unread";
       const badge = n.is_read ? "" : '<span class="pill-unread">New</span>';
-      return `<div class="info-card${unreadCls ? " unread" : ""}"><strong>${escapeHtml(n.title || "Activity")}</strong><p class="muted">${escapeHtml(n.message || "")}</p>${badge}</div>`;
+      const dismiss =
+        dismissable && n.id != null
+          ? `<button type="button" class="activity-dismiss-btn" data-notif-id="${Number(n.id)}" aria-label="Remove from list" title="Remove">×</button>`
+          : "";
+      return `<div class="info-card activity-card${unreadCls ? " unread" : ""}">${dismiss}<strong>${escapeHtml(n.title || "Activity")}</strong><p class="muted">${escapeHtml(n.message || "")}</p>${badge}</div>`;
     })
     .join("")}</div>`;
 }
 
+function bindActivityDismissButtons(root) {
+  if (!root) return;
+  root.querySelectorAll(".activity-dismiss-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = Number(btn.dataset.notifId);
+      if (!id) return;
+      try {
+        await api("/notifications/remove-one", { method: "POST", body: JSON.stringify({ id }) });
+        btn.closest(".activity-card")?.remove();
+        await loadNotifications();
+        refreshNotificationBell();
+      } catch (_err) {
+        /* ignore */
+      }
+    });
+  });
+}
+
+/** Parse API datetime; naive `YYYY-MM-DD hh:mm:ss` (no zone) is treated as UTC (matches MySQL TIMESTAMP in UTC). */
+function parseUtcInstant(val) {
+  if (val == null || val === "") return null;
+  if (val instanceof Date) return Number.isNaN(val.getTime()) ? null : val;
+  const s = String(val).trim();
+  if (!s) return null;
+  const hasExplicitZone = /[zZ]$/.test(s) || /[+-]\d{2}:\d{2}$/.test(s) || /[+-]\d{4}$/.test(s);
+  if (hasExplicitZone) {
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const naiveMysql = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(\.\d+)?/);
+  if (naiveMysql) {
+    let frac = naiveMysql[3] || "";
+    if (frac.length > 4) frac = frac.slice(0, 4);
+    const d = new Date(`${naiveMysql[1]}T${naiveMysql[2]}${frac}Z`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 function formatRelativeTime(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
+  const d = parseUtcInstant(iso);
+  if (!d) return "";
   const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return "just now";
+  if (diff < 10) return "just now";
+  if (diff < 60) return `${Math.floor(diff)}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
   return d.toLocaleDateString();
+}
+
+/** Prefer server-provided epoch ms (UNIX_TIMESTAMP) so "just now" is never skewed by TZ parsing. */
+function formatNotificationRelativeTime(n) {
+  const ms = n && n.created_at_ms != null ? Number(n.created_at_ms) : NaN;
+  if (Number.isFinite(ms)) {
+    const d = new Date(ms);
+    if (!Number.isNaN(d.getTime())) {
+      const diff = (Date.now() - d.getTime()) / 1000;
+      if (diff < 10) return "just now";
+      if (diff < 60) return `${Math.floor(diff)}s ago`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+      if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+      return d.toLocaleDateString();
+    }
+  }
+  return formatRelativeTime(n?.created_at);
 }
 
 async function renderNotificationsView(root) {
@@ -1070,7 +1158,8 @@ async function renderNotificationsView(root) {
               <p>${escapeHtml(n.message || "")}</p>
               ${badge}
             </div>
-            <div class="notification-meta">${formatRelativeTime(n.created_at)}</div>
+            <div class="notification-meta">${formatNotificationRelativeTime(n)}</div>
+            <button type="button" class="notification-delete-btn" data-notif-id="${n.id}" aria-label="Delete notification" title="Delete">×</button>
           </div>`;
         })
         .join("")}</div>`;
@@ -1080,7 +1169,10 @@ async function renderNotificationsView(root) {
         <h2 class="section-title">Notifications</h2>
         <p class="muted tiny">${unreadCount} unread of ${items.length} total.</p>
       </div>
-      <button id="markAllReadBtn" class="btn ghost" ${unreadCount === 0 ? "disabled" : ""}>Mark all as read</button>
+      <div class="panel-header-actions">
+        <button id="markAllReadBtn" class="btn ghost" ${unreadCount === 0 ? "disabled" : ""}>Mark all as read</button>
+        <button id="deleteAllNotifsBtn" class="btn ghost" ${items.length === 0 ? "disabled" : ""}>Delete all</button>
+      </div>
     </div>
     ${listHtml}
     <p id="notifMsg" class="feedback"></p>`;
@@ -1096,8 +1188,23 @@ async function renderNotificationsView(root) {
     }
   });
 
+  document.getElementById("deleteAllNotifsBtn")?.addEventListener("click", async () => {
+    if (items.length === 0) return;
+    if (!confirm("Delete all notifications? This cannot be undone.")) return;
+    try {
+      await api("/notifications/clear-all", { method: "POST", body: JSON.stringify({}) });
+      await loadNotifications();
+      refreshNotificationBell();
+      await renderNotificationsView(root);
+    } catch (err) {
+      msg.textContent = err.message;
+      msg.className = "feedback feedback-error";
+    }
+  });
+
   document.querySelectorAll(".notification-row").forEach((row) => {
-    row.addEventListener("click", async () => {
+    row.addEventListener("click", async (ev) => {
+      if (ev.target.closest(".notification-delete-btn")) return;
       if (row.dataset.read === "1") return;
       const id = row.dataset.id;
       try {
@@ -1106,8 +1213,27 @@ async function renderNotificationsView(root) {
         row.dataset.read = "1";
         row.querySelector(".pill-unread")?.remove();
         await loadNotifications();
+        refreshNotificationBell();
       } catch (_err) {
         /* ignore */
+      }
+    });
+  });
+
+  document.querySelectorAll(".notification-delete-btn").forEach((btn) => {
+    btn.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.dataset.notifId;
+      if (!id) return;
+      try {
+        await api("/notifications/remove-one", { method: "POST", body: JSON.stringify({ id: Number(id) }) });
+        await loadNotifications();
+        refreshNotificationBell();
+        await renderNotificationsView(root);
+      } catch (err) {
+        msg.textContent = err.message;
+        msg.className = "feedback feedback-error";
       }
     });
   });
@@ -1442,7 +1568,8 @@ async function renderCounselorView(root, menu) {
     return;
   }
   await loadNotifications();
-  root.innerHTML = `<div class="panel-header"><h2 class="section-title">Welcome ${state.user?.name || "Counselor"}!</h2></div><h3>Recent Activity</h3>${renderRecentActivity(state.notifications)}`;
+  root.innerHTML = `<div class="panel-header"><h2 class="section-title">Welcome ${state.user?.name || "Counselor"}!</h2></div><h3>Recent Activity</h3>${renderRecentActivity(state.notifications, { dismissable: true })}`;
+  bindActivityDismissButtons(root);
 }
 
 function renderGcoServicesPage(root) {
@@ -1499,7 +1626,7 @@ async function renderStudentView(root, menu) {
     await loadCounselors();
     const todayIso = new Date().toISOString().slice(0, 10);
     const slotOptions = [
-      { value: "07:30", label: "07:30 AM - 08:30 AM" },
+      { value: "08:15", label: "08:15 AM - 08:55 AM" },
       { value: "09:00", label: "09:00 AM - 10:00 AM" },
       { value: "10:30", label: "10:30 AM - 11:30 AM" },
       { value: "13:00", label: "01:00 PM - 02:00 PM" },
@@ -1768,7 +1895,8 @@ async function renderStudentView(root, menu) {
   }
   if (menu === "Settings") return renderAccountSettings(root);
   await loadNotifications();
-  root.innerHTML = `<div class="panel-header"><h2 class="section-title">Welcome ${state.user?.name || "Student"}!</h2></div><h3>Recent Activity</h3>${renderRecentActivity(state.notifications)}`;
+  root.innerHTML = `<div class="panel-header"><h2 class="section-title">Welcome ${state.user?.name || "Student"}!</h2></div><h3>Recent Activity</h3>${renderRecentActivity(state.notifications, { dismissable: true })}`;
+  bindActivityDismissButtons(root);
 }
 
 async function renderAdminSystemLogsPage(root) {
@@ -2399,21 +2527,15 @@ async function renderAdminView(root, menu) {
       <div class="admin-stat-card">
         <p class="admin-stat-label">Total bookings</p>
         <p class="admin-stat-value" id="adminStatBookings">${overview.totalAppointments}</p>
-
       </div>
       <div class="admin-stat-card">
         <p class="admin-stat-label">Open requests</p>
         <p class="admin-stat-value" id="adminStatOpen">${overview.pendingRequests}</p>
-
-      </div>
-    </div>
-
-      </div>
-
       </div>
     </div>
     <h3>Recent Activity</h3>
-    ${renderRecentActivity(state.notifications)}`;
+    ${renderRecentActivity(state.notifications, { dismissable: true })}`;
+  bindActivityDismissButtons(root);
 
   const refreshAdminOverview = async () => {
     try {
@@ -2503,4 +2625,3 @@ window.addEventListener("popstate", () => {
 });
 
 initApp();
-
