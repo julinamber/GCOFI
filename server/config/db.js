@@ -76,6 +76,12 @@ async function initDb() {
   await ensureColumn(db, "appointments", "outcome_at", "ALTER TABLE appointments ADD COLUMN outcome_at DATETIME NULL");
   await ensureColumn(db, "appointments", "outcome_by", "ALTER TABLE appointments ADD COLUMN outcome_by INT NULL");
   await ensureColumn(db, "appointments", "outcome_note", "ALTER TABLE appointments ADD COLUMN outcome_note TEXT NULL");
+  await ensureColumn(
+    db,
+    "appointments",
+    "session_duration_minutes",
+    "ALTER TABLE appointments ADD COLUMN session_duration_minutes TINYINT UNSIGNED DEFAULT 60"
+  );
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -160,6 +166,29 @@ async function initDb() {
 
   await db.query("UPDATE users SET email_verified = 1 WHERE email IN ('student@my.xu.edu.ph','counselor@xu.edu.ph','admin@xu.edu.ph')");
   await db.query("UPDATE users SET verification_token = NULL, verification_expires_at = NULL WHERE email_verified = 1");
+
+  await seedDirectoryCounselors(db);
+}
+
+async function seedDirectoryCounselors(db) {
+  const roster = [
+    ["Sir Bobby", "sir.bobby@xu.edu.ph"],
+    ["Sir Larry", "sir.larry@xu.edu.ph"],
+    ["Ma'am Chaisa", "maam.chaisa@xu.edu.ph"],
+    ["Ma'am Faith", "maam.faith@xu.edu.ph"],
+    ["Sir Sean", "sir.sean@xu.edu.ph"],
+    ["Doc Jegonia", "doc.jegonia@xu.edu.ph"]
+  ];
+  const hash = await bcrypt.hash("counselor123", 10);
+  for (const [fullName, email] of roster) {
+    const [ex] = await db.query("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", [email]);
+    if (ex.length > 0) continue;
+    await db.query(
+      `INSERT INTO users (full_name, email, password_hash, role, is_active, email_verified)
+       VALUES (?, ?, ?, 'counselor', 1, 1)`,
+      [fullName, email.toLowerCase(), hash]
+    );
+  }
 }
 
 async function ensureColumn(db, tableName, columnName, addSql) {
