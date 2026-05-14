@@ -299,16 +299,7 @@ function clearAuthProvidersCache() {
 }
 
 async function api(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  const method = String(options.method || "GET").toUpperCase();
-  const hasBody = options.body !== undefined && options.body !== null && options.body !== "";
-  const useJsonContentType =
-    hasBody ||
-    method === "PATCH" ||
-    method === "PUT";
-  if (useJsonContentType && !headers["Content-Type"] && !headers["content-type"]) {
-    headers["Content-Type"] = "application/json";
-  }
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   let response;
   try {
@@ -317,13 +308,7 @@ async function api(path, options = {}) {
     throw new Error("Cannot reach API. Open the app via http://localhost:3000 (not file://).");
   }
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail =
-      (data && data.message) ||
-      response.statusText ||
-      (response.status ? `HTTP ${response.status}` : "Request failed");
-    throw new Error(detail);
-  }
+  if (!response.ok) throw new Error(data.message || "Request failed");
   return data;
 }
 
@@ -689,10 +674,10 @@ function renderDashboard(role) {
   };
 
   document.getElementById("roleDashboardLabel").textContent = state.user?.name || "User";
-  const sidebarEmail = document.getElementById("sidebarUserEmail");
-  const sidebarRoleLine = document.getElementById("sidebarUserRole");
-  if (sidebarEmail) sidebarEmail.textContent = state.user?.email || "";
-  if (sidebarRoleLine) sidebarRoleLine.textContent = role || "";
+  const sidebarMeta = document.getElementById("sidebarUserMeta");
+  if (sidebarMeta) {
+    sidebarMeta.textContent = `${state.user?.email || ""} · ${role}`;
+  }
   const sidebarDesc = document.getElementById("sidebarRoleDesc");
   if (sidebarDesc) sidebarDesc.textContent = roleDescriptions[role] || "";
   refreshSidebarIdentity();
@@ -736,10 +721,6 @@ async function refreshSidebarIdentity() {
     state.user = { ...(state.user || {}), name: me.name, email: me.email, role: me.role };
     localStorage.setItem("gco_user", JSON.stringify(state.user));
     label.textContent = me.name || "User";
-    const emailEl = document.getElementById("sidebarUserEmail");
-    const roleEl = document.getElementById("sidebarUserRole");
-    if (emailEl) emailEl.textContent = me.email || "";
-    if (roleEl) roleEl.textContent = me.role || "";
     const initials = String(me.name || "U")
       .split(" ")
       .filter(Boolean)
@@ -756,10 +737,6 @@ async function refreshSidebarIdentity() {
       avatarFallback.classList.remove("hidden");
     }
   } catch (_err) {
-    const emailEl = document.getElementById("sidebarUserEmail");
-    const roleEl = document.getElementById("sidebarUserRole");
-    if (emailEl) emailEl.textContent = state.user?.email || "";
-    if (roleEl) roleEl.textContent = state.user?.role || "";
     const initials = String(state.user?.name || "U")
       .split(" ")
       .filter(Boolean)
@@ -845,7 +822,8 @@ function showToast(message) {
   }, 2800);
 }
 
-function buildYearCalendar(year, appointments, unavailable) {
+function buildYearCalendar(year, appointments, unavailable, options = {}) {
+  const { disableWeekendBooking } = options;
   const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const week = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -863,18 +841,21 @@ function buildYearCalendar(year, appointments, unavailable) {
       for (let i = 0; i < firstDay; i += 1) cells.push('<div class="month-day empty"></div>');
       for (let day = 1; day <= daysInMonth; day += 1) {
         const iso = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        const dow = new Date(year, monthIndex, day).getDay();
+        const isWeekend = dow === 0 || dow === 6;
         const classes = ["month-day"];
-        if (unavailableMap.has(iso)) classes.push("unavailable");
+        if (disableWeekendBooking && isWeekend) classes.push("weekend-no-book");
+        else if (unavailableMap.has(iso)) classes.push("unavailable");
         else if (iso === todayIso) classes.push("today");
         else if (appointmentDates.has(iso) || partialDates.has(iso)) classes.push("booked");
-        const title = unavailableMap.has(iso)
-          ? unavailableMap.get(iso).message || "Unavailable"
-          : partialDates.has(iso)
-          ? "Partially blocked — open the day to see available times"
-          : appointmentDates.has(iso)
-          ? "With appointments"
-          : "Available";
-        cells.push(`<button type="button" class="${classes.join(" ")} calendar-day-btn" data-date="${iso}" title="${title}">${day}</button>`);
+        let title = "";
+        if (disableWeekendBooking && isWeekend) {
+          title = "No bookings on weekends";
+        } else if (unavailableMap.has(iso)) title = unavailableMap.get(iso).message || "Unavailable";
+        else if (partialDates.has(iso)) title = "Partially blocked — open the day to see available times";
+        else if (appointmentDates.has(iso)) title = "With appointments";
+        else title = "Available";
+        cells.push(`<button type="button" class="${classes.join(" ")} calendar-day-btn" data-date="${iso}" title="${escapeHtml(title)}">${day}</button>`);
       }
       return `
         <div class="month-card">
@@ -1052,93 +1033,28 @@ async function renderCounselorCalendar(root) {
   };
 }
 
-function renderRecentActivity(items, opts = {}) {
-  const { dismissable = false } = opts;
+function renderRecentActivity(items) {
   const rows = (items || []).slice(0, 8);
   if (!rows.length) return "<p class='muted'>No recent activity.</p>";
   return `<div class="stack-sm">${rows
     .map((n) => {
       const unreadCls = n.is_read ? "" : " unread";
       const badge = n.is_read ? "" : '<span class="pill-unread">New</span>';
-      const dismiss =
-        dismissable && n.id != null
-          ? `<button type="button" class="activity-dismiss-btn" data-notif-id="${Number(n.id)}" aria-label="Remove from list" title="Remove">×</button>`
-          : "";
-      return `<div class="info-card activity-card${unreadCls ? " unread" : ""}">${dismiss}<strong>${escapeHtml(n.title || "Activity")}</strong><p class="muted">${escapeHtml(n.message || "")}</p>${badge}</div>`;
+      return `<div class="info-card${unreadCls ? " unread" : ""}"><strong>${escapeHtml(n.title || "Activity")}</strong><p class="muted">${escapeHtml(n.message || "")}</p>${badge}</div>`;
     })
     .join("")}</div>`;
 }
 
-function bindActivityDismissButtons(root) {
-  if (!root) return;
-  root.querySelectorAll(".activity-dismiss-btn").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const id = Number(btn.dataset.notifId);
-      if (!id) return;
-      try {
-        await api("/notifications/remove-one", { method: "POST", body: JSON.stringify({ id }) });
-        btn.closest(".activity-card")?.remove();
-        await loadNotifications();
-        refreshNotificationBell();
-      } catch (_err) {
-        /* ignore */
-      }
-    });
-  });
-}
-
-/** Parse API datetime; naive `YYYY-MM-DD hh:mm:ss` (no zone) is treated as UTC (matches MySQL TIMESTAMP in UTC). */
-function parseUtcInstant(val) {
-  if (val == null || val === "") return null;
-  if (val instanceof Date) return Number.isNaN(val.getTime()) ? null : val;
-  const s = String(val).trim();
-  if (!s) return null;
-  const hasExplicitZone = /[zZ]$/.test(s) || /[+-]\d{2}:\d{2}$/.test(s) || /[+-]\d{4}$/.test(s);
-  if (hasExplicitZone) {
-    const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  const naiveMysql = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(\.\d+)?/);
-  if (naiveMysql) {
-    let frac = naiveMysql[3] || "";
-    if (frac.length > 4) frac = frac.slice(0, 4);
-    const d = new Date(`${naiveMysql[1]}T${naiveMysql[2]}${frac}Z`);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
 function formatRelativeTime(iso) {
-  const d = parseUtcInstant(iso);
-  if (!d) return "";
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
   const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 10) return "just now";
-  if (diff < 60) return `${Math.floor(diff)}s ago`;
+  if (diff < 60) return "just now";
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
   return d.toLocaleDateString();
-}
-
-/** Prefer server-provided epoch ms (UNIX_TIMESTAMP) so "just now" is never skewed by TZ parsing. */
-function formatNotificationRelativeTime(n) {
-  const ms = n && n.created_at_ms != null ? Number(n.created_at_ms) : NaN;
-  if (Number.isFinite(ms)) {
-    const d = new Date(ms);
-    if (!Number.isNaN(d.getTime())) {
-      const diff = (Date.now() - d.getTime()) / 1000;
-      if (diff < 10) return "just now";
-      if (diff < 60) return `${Math.floor(diff)}s ago`;
-      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-      if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-      return d.toLocaleDateString();
-    }
-  }
-  return formatRelativeTime(n?.created_at);
 }
 
 async function renderNotificationsView(root) {
@@ -1158,8 +1074,7 @@ async function renderNotificationsView(root) {
               <p>${escapeHtml(n.message || "")}</p>
               ${badge}
             </div>
-            <div class="notification-meta">${formatNotificationRelativeTime(n)}</div>
-            <button type="button" class="notification-delete-btn" data-notif-id="${n.id}" aria-label="Delete notification" title="Delete">×</button>
+            <div class="notification-meta">${formatRelativeTime(n.created_at)}</div>
           </div>`;
         })
         .join("")}</div>`;
@@ -1169,10 +1084,7 @@ async function renderNotificationsView(root) {
         <h2 class="section-title">Notifications</h2>
         <p class="muted tiny">${unreadCount} unread of ${items.length} total.</p>
       </div>
-      <div class="panel-header-actions">
-        <button id="markAllReadBtn" class="btn ghost" ${unreadCount === 0 ? "disabled" : ""}>Mark all as read</button>
-        <button id="deleteAllNotifsBtn" class="btn ghost" ${items.length === 0 ? "disabled" : ""}>Delete all</button>
-      </div>
+      <button id="markAllReadBtn" class="btn ghost" ${unreadCount === 0 ? "disabled" : ""}>Mark all as read</button>
     </div>
     ${listHtml}
     <p id="notifMsg" class="feedback"></p>`;
@@ -1188,23 +1100,8 @@ async function renderNotificationsView(root) {
     }
   });
 
-  document.getElementById("deleteAllNotifsBtn")?.addEventListener("click", async () => {
-    if (items.length === 0) return;
-    if (!confirm("Delete all notifications? This cannot be undone.")) return;
-    try {
-      await api("/notifications/clear-all", { method: "POST", body: JSON.stringify({}) });
-      await loadNotifications();
-      refreshNotificationBell();
-      await renderNotificationsView(root);
-    } catch (err) {
-      msg.textContent = err.message;
-      msg.className = "feedback feedback-error";
-    }
-  });
-
   document.querySelectorAll(".notification-row").forEach((row) => {
-    row.addEventListener("click", async (ev) => {
-      if (ev.target.closest(".notification-delete-btn")) return;
+    row.addEventListener("click", async () => {
       if (row.dataset.read === "1") return;
       const id = row.dataset.id;
       try {
@@ -1213,27 +1110,8 @@ async function renderNotificationsView(root) {
         row.dataset.read = "1";
         row.querySelector(".pill-unread")?.remove();
         await loadNotifications();
-        refreshNotificationBell();
       } catch (_err) {
         /* ignore */
-      }
-    });
-  });
-
-  document.querySelectorAll(".notification-delete-btn").forEach((btn) => {
-    btn.addEventListener("click", async (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      const id = btn.dataset.notifId;
-      if (!id) return;
-      try {
-        await api("/notifications/remove-one", { method: "POST", body: JSON.stringify({ id: Number(id) }) });
-        await loadNotifications();
-        refreshNotificationBell();
-        await renderNotificationsView(root);
-      } catch (err) {
-        msg.textContent = err.message;
-        msg.className = "feedback feedback-error";
       }
     });
   });
@@ -1568,12 +1446,16 @@ async function renderCounselorView(root, menu) {
     return;
   }
   await loadNotifications();
-  root.innerHTML = `<div class="panel-header"><h2 class="section-title">Welcome ${state.user?.name || "Counselor"}!</h2></div><h3>Recent Activity</h3>${renderRecentActivity(state.notifications, { dismissable: true })}`;
-  bindActivityDismissButtons(root);
+  root.innerHTML = `<div class="panel-header"><h2 class="section-title">Welcome ${state.user?.name || "Counselor"}!</h2></div><h3>Recent Activity</h3>${renderRecentActivity(state.notifications)}`;
 }
 
 function renderGcoServicesPage(root) {
   const services = [
+    {
+      title: "Befriending",
+      body:
+        "Structured one-on-one support that helps students feel seen and connected. A counselor walks alongside you through adjustment, stress, or loneliness while linking you to other GCO services when you need more focused help."
+    },
     {
       title: "Counseling",
       body:
@@ -1625,17 +1507,15 @@ async function renderStudentView(root, menu) {
   if (menu === "Book Appointment") {
     await loadCounselors();
     const todayIso = new Date().toISOString().slice(0, 10);
-    const slotOptions = [
-      { value: "08:15", label: "08:15 AM - 08:55 AM" },
-      { value: "09:00", label: "09:00 AM - 10:00 AM" },
-      { value: "10:30", label: "10:30 AM - 11:30 AM" },
-      { value: "13:00", label: "01:00 PM - 02:00 PM" },
-      { value: "14:30", label: "02:30 PM - 03:30 PM" }
-    ];
+    if (!state.counselors?.length) {
+      root.innerHTML = `<div class="panel-header"><h2 class="section-title">Book Appointment</h2></div><p class="feedback feedback-error">No counselors are available yet. Please check back later.</p>`;
+      return;
+    }
+
     root.innerHTML = `
       <div class="panel-header"><h2 class="section-title">Book Appointment</h2></div>
       <form id="bookForm" class="stack-md">
-        <label class="field"><span>Counselor</span><select id="bookCounselor" required>${state.counselors.map((c) => `<option value="${c.id}">${c.name}</option>`).join("")}</select></label>
+        <label class="field"><span>Counselor</span><select id="bookCounselor" required>${state.counselors.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}</select></label>
         <div class="booking-meta-grid">
           <label class="field"><span>Year Level</span><select id="bookYearLevel" required>${YEAR_LEVEL_OPTIONS.map((y) => `<option value="${y}">${y}</option>`).join("")}</select></label>
           <label class="field"><span>College</span><select id="bookCollege" required>${COLLEGE_OPTIONS.map((c) => `<option value="${c}">${c}</option>`).join("")}</select></label>
@@ -1644,11 +1524,11 @@ async function renderStudentView(root, menu) {
         <section id="bookingDetailsSection" class="booking-details-card stack-md">
           <div class="booking-details-header">
             <h3>Appointment Details</h3>
-            <p class="muted tiny" id="bookingDetailsHint">Pick a date on the calendar above to begin.</p>
+            <p class="muted tiny" id="bookingDetailsHint">Pick a weekday on the calendar (Monday–Friday). Saturdays are closed for booking.</p>
           </div>
           <label class="field"><span>Date</span><input type="date" id="bookDate" min="${todayIso}" required /></label>
-          <label class="field"><span>Time</span><select id="bookTime">${slotOptions.map((s) => `<option value="${s.value}">${s.label}</option>`).join("")}</select></label>
-          <label class="field"><span>Service Type</span><select id="bookService"><option value="Counseling">Counseling</option><option value="Academic/Probation Follow up">Academic/Probation Follow up</option><option value="Individual Inventory">Individual Inventory</option><option value="Placement Program">Placement Program</option><option value="Faculty/Parent Consultation">Faculty/Parent Consultation</option></select></label>
+            <label class="field"><span>Time</span><select id="bookTime" required><option value="">Choose counselor and date first</option></select></label>
+            <label class="field"><span>Service Type</span><select id="bookService" required><option value="">Loading…</option></select></label>
           <label class="field"><span>Additional Information</span><textarea id="bookReason" placeholder="Tell us briefly what you need help with."></textarea></label>
           <button type="submit" class="btn primary">Book Appointment</button>
         </section>
@@ -1662,16 +1542,50 @@ async function renderStudentView(root, menu) {
     let fullDayBlocks = new Set();
     let partialBlocks = [];
 
+    const isoIsWeekend = (iso) => {
+      const d = new Date(`${iso}T12:00:00`);
+      const x = d.getDay();
+      return x === 0 || x === 6;
+    };
+
+    const fillServiceSelect = (serviceList) => {
+      const sel = document.getElementById("bookService");
+      if (!sel) return;
+      const prev = sel.value;
+      const list = Array.isArray(serviceList) ? serviceList : [];
+      sel.innerHTML = list.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+      if (list.includes(prev)) sel.value = prev;
+    };
+
+    const fillTimeSelect = (slots) => {
+      const sel = document.getElementById("bookTime");
+      if (!sel) return;
+      if (!slots.length) {
+        sel.innerHTML = `<option value="">No open slots for this day</option>`;
+        sel.removeAttribute("required");
+        return;
+      }
+      sel.setAttribute("required", "required");
+      sel.innerHTML = slots
+        .map(
+          (s) =>
+            `<option value="${escapeHtml(s.value)}" data-duration="${Number(s.durationMinutes) || 60}">${escapeHtml(s.label)}</option>`
+        )
+        .join("");
+    };
+
     const refreshTimeOptionsForDate = (date) => {
       const timeSelect = document.getElementById("bookTime");
       if (!timeSelect) return;
       const blocksToday = partialBlocks.filter((b) => b.date === date);
       Array.from(timeSelect.options).forEach((opt) => {
-        if (!opt.dataset.baseLabel) opt.dataset.baseLabel = opt.textContent;
+        if (!opt.value) return;
+        if (!opt.dataset.baseLabel) opt.dataset.baseLabel = opt.textContent.replace(/\s*— Unavailable\s*$/, "").trim();
         const slotStart = opt.value;
+        const dur = Number(opt.dataset.duration || 60);
         const [h, m] = slotStart.split(":").map(Number);
         const startMin = h * 60 + m;
-        const endMin = startMin + 60;
+        const endMin = startMin + dur;
         const eh = String(Math.floor(endMin / 60)).padStart(2, "0");
         const em = String(endMin % 60).padStart(2, "0");
         const slotEnd = `${eh}:${em}`;
@@ -1683,9 +1597,51 @@ async function renderStudentView(root, menu) {
         opt.disabled = conflict;
         opt.textContent = conflict ? `${opt.dataset.baseLabel} — Unavailable` : opt.dataset.baseLabel;
       });
-      if (timeSelect.selectedOptions[0]?.disabled) {
-        const firstEnabled = Array.from(timeSelect.options).find((o) => !o.disabled);
-        timeSelect.value = firstEnabled ? firstEnabled.value : "";
+      const firstOk = Array.from(timeSelect.options).find((o) => o.value && !o.disabled);
+      if (firstOk) timeSelect.value = firstOk.value;
+    };
+
+    const applyBookingOptions = async () => {
+      const cid = counselorSelect.value;
+      const date = dateInput.value;
+      const hint = document.getElementById("bookingDetailsHint");
+      if (!cid) return;
+      try {
+        let url = `/utility/booking-options?counselorId=${encodeURIComponent(cid)}`;
+        if (date) url += `&date=${encodeURIComponent(date)}`;
+        const data = await api(url);
+        fillServiceSelect(data.services || []);
+        if (date) {
+          fillTimeSelect(data.slots || []);
+          if (data.dayNote && hint) hint.textContent = data.dayNote;
+          else if (hint) {
+            const partialToday = partialBlocks.filter((b) => b.date === date);
+            if (!(data.slots || []).length) {
+              hint.textContent = isoIsWeekend(date)
+                ? "Weekends are closed for booking. Please choose a weekday."
+                : "No time slots remain for this counselor on this date.";
+            } else if (partialToday.length) {
+              const ranges = partialToday.map((b) => `${b.start}–${b.end}`).join(", ");
+              hint.textContent = `Selected ${date}. Counselor is blocked ${ranges}; times below avoid those windows when possible.`;
+            } else {
+              hint.textContent = `Selected ${date}. Choose a time and add notes if you wish.`;
+            }
+          }
+          refreshTimeOptionsForDate(date);
+        } else {
+          const sel = document.getElementById("bookTime");
+          if (sel) {
+            sel.innerHTML = `<option value="">Choose a date on the calendar</option>`;
+            sel.removeAttribute("required");
+          }
+          if (hint) hint.textContent = "Pick a weekday on the calendar (Monday–Friday). Saturdays are closed for booking.";
+        }
+      } catch (err) {
+        const msg = document.getElementById("bookMsg");
+        if (msg) {
+          msg.textContent = err.message || "Could not load booking options.";
+          msg.className = "feedback feedback-error";
+        }
       }
     };
 
@@ -1708,7 +1664,7 @@ async function renderStudentView(root, menu) {
         <div class="year-header">
           <div>
             <h3>Counselor Calendar</h3>
-            <p class="muted tiny">Unavailable dates are blocked. Click an available day to auto-fill the date.</p>
+            <p class="muted tiny">Unavailable dates are blocked. Weekends cannot be booked. Click a weekday to fill the date.</p>
           </div>
           <div class="year-nav">
             <button type="button" class="btn ghost" id="studentCalPrevYear">‹</button>
@@ -1722,35 +1678,33 @@ async function renderStudentView(root, menu) {
           <span><i class="dot unavailable"></i>Unavailable</span>
           <span><i class="dot today"></i>Today</span>
         </div>
-        <div class="year-calendar-grid">${buildYearCalendar(studentCalendarYear, calendarData.appointments || [], calendarData.unavailable || [])}</div>
+        <div class="year-calendar-grid">${buildYearCalendar(studentCalendarYear, calendarData.appointments || [], calendarData.unavailable || [], { disableWeekendBooking: true })}</div>
       `;
       const today = new Date().toISOString().slice(0, 10);
       calendarWrap.querySelectorAll(".calendar-day-btn").forEach((btn) => {
         const selected = btn.dataset.date;
         const isFullDayBlocked = fullDayBlocks.has(selected);
         const isPast = selected < today;
-        if (isFullDayBlocked || isPast) {
+        const isWeekend = isoIsWeekend(selected);
+        if (isFullDayBlocked || isPast || isWeekend) {
           btn.disabled = true;
           btn.classList.add("disabled");
-          btn.title = isFullDayBlocked ? "Counselor unavailable all day" : "Past date";
+          btn.title = isWeekend ? "No bookings on weekends" : isFullDayBlocked ? "Counselor unavailable all day" : "Past date";
         } else {
           const partialToday = partialBlocks.filter((b) => b.date === selected);
           if (partialToday.length) {
             const ranges = partialToday.map((b) => `${b.start} – ${b.end}`).join(", ");
-            btn.title = `Partially blocked: ${ranges}. Other times still available.`;
+            btn.title = `Partially blocked: ${ranges}. Other times may still be available.`;
           }
           btn.onclick = () => {
             dateInput.value = selected;
             dateInput.dispatchEvent(new Event("change", { bubbles: true }));
-            refreshTimeOptionsForDate(selected);
             const detailsSection = document.getElementById("bookingDetailsSection");
             const hint = document.getElementById("bookingDetailsHint");
             if (hint) {
               if (partialToday.length) {
                 const ranges = partialToday.map((b) => `${b.start}–${b.end}`).join(", ");
-                hint.textContent = `Selected ${selected}. Counselor is unavailable ${ranges}; other slots are open.`;
-              } else {
-                hint.textContent = `Selected ${selected}. Choose a time, service type, and add notes below.`;
+                hint.textContent = `Selected ${selected}. Counselor is unavailable ${ranges}; other slots may still be open.`;
               }
             }
             if (detailsSection) {
@@ -1766,32 +1720,52 @@ async function renderStudentView(root, menu) {
       document.getElementById("studentCalPrevYear").onclick = async () => {
         studentCalendarYear -= 1;
         await loadUnavailable();
+        await applyBookingOptions();
       };
       document.getElementById("studentCalNextYear").onclick = async () => {
         studentCalendarYear += 1;
         await loadUnavailable();
+        await applyBookingOptions();
       };
     };
-    counselorSelect.onchange = loadUnavailable;
+
+    counselorSelect.onchange = async () => {
+      await loadUnavailable();
+      await applyBookingOptions();
+    };
+
     await loadUnavailable();
-    dateInput.onchange = () => {
+    await applyBookingOptions();
+
+    dateInput.onchange = async () => {
       const v = dateInput.value;
-      if (fullDayBlocks.has(v)) {
+      if (isoIsWeekend(v)) {
+        dateInput.setCustomValidity("Bookings are only available Monday through Friday (weekends are closed).");
+      } else if (fullDayBlocks.has(v)) {
         dateInput.setCustomValidity("Selected date is fully unavailable for this counselor.");
       } else {
         dateInput.setCustomValidity("");
       }
-      refreshTimeOptionsForDate(v);
+      await applyBookingOptions();
     };
+
     document.getElementById("bookForm").onsubmit = async (e) => {
       e.preventDefault();
+      const timeEl = document.getElementById("bookTime");
+      const serviceEl = document.getElementById("bookService");
+      if (!timeEl.value || timeEl.selectedOptions[0]?.disabled) {
+        const msg = document.getElementById("bookMsg");
+        msg.textContent = "Please choose an available time slot.";
+        msg.className = "feedback feedback-error";
+        return;
+      }
       const payload = {
         counselorId: Number(counselorSelect.value),
         yearLevel: document.getElementById("bookYearLevel").value,
         college: document.getElementById("bookCollege").value,
         date: dateInput.value,
-        time: document.getElementById("bookTime").value,
-        serviceType: document.getElementById("bookService").value,
+        time: timeEl.value,
+        serviceType: serviceEl.value,
         reason: document.getElementById("bookReason").value.trim()
       };
       const msg = document.getElementById("bookMsg");
@@ -1895,8 +1869,7 @@ async function renderStudentView(root, menu) {
   }
   if (menu === "Settings") return renderAccountSettings(root);
   await loadNotifications();
-  root.innerHTML = `<div class="panel-header"><h2 class="section-title">Welcome ${state.user?.name || "Student"}!</h2></div><h3>Recent Activity</h3>${renderRecentActivity(state.notifications, { dismissable: true })}`;
-  bindActivityDismissButtons(root);
+  root.innerHTML = `<div class="panel-header"><h2 class="section-title">Welcome ${state.user?.name || "Student"}!</h2></div><h3>Recent Activity</h3>${renderRecentActivity(state.notifications)}`;
 }
 
 async function renderAdminSystemLogsPage(root) {
@@ -2034,7 +2007,14 @@ async function renderAdminAnalyticsPage(root) {
   let selectedYearLevel = "";
   let selectedCollege = "";
 
-  const SERVICE_OPTIONS = ["Counseling", "Academic/Probation Follow up", "Individual Inventory", "Placement Program", "Faculty/Parent Consultation"];
+  const SERVICE_OPTIONS = [
+    "Befriending",
+    "Counseling",
+    "Academic/Probation Follow up",
+    "Individual Inventory",
+    "Placement Program",
+    "Faculty/Parent Consultation"
+  ];
   const allServices = Array.from(new Set([...SERVICE_OPTIONS, ...(distinct.services || [])]));
   const allYearLevels = Array.from(new Set(["1st Year", "2nd Year", "3rd Year", "4th Year", ...(distinct.yearLevels || [])]));
   const COLLEGE_OPTIONS_LOCAL = [
@@ -2527,15 +2507,21 @@ async function renderAdminView(root, menu) {
       <div class="admin-stat-card">
         <p class="admin-stat-label">Total bookings</p>
         <p class="admin-stat-value" id="adminStatBookings">${overview.totalAppointments}</p>
+
       </div>
       <div class="admin-stat-card">
         <p class="admin-stat-label">Open requests</p>
         <p class="admin-stat-value" id="adminStatOpen">${overview.pendingRequests}</p>
+
+      </div>
+    </div>
+
+      </div>
+
       </div>
     </div>
     <h3>Recent Activity</h3>
-    ${renderRecentActivity(state.notifications, { dismissable: true })}`;
-  bindActivityDismissButtons(root);
+    ${renderRecentActivity(state.notifications)}`;
 
   const refreshAdminOverview = async () => {
     try {
@@ -2625,3 +2611,4 @@ window.addEventListener("popstate", () => {
 });
 
 initApp();
+
