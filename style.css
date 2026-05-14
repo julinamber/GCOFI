@@ -139,8 +139,8 @@ body {
 
 .notification-row {
   display: grid;
-  grid-template-columns: 10px 1fr auto;
-  gap: 0.65rem;
+  grid-template-columns: 10px 1fr auto auto;
+  gap: 0.5rem 0.65rem;
   align-items: start;
   padding: 0.85rem 1rem;
   border-radius: 14px;
@@ -195,6 +195,59 @@ body {
   font-size: 0.7rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.notification-delete-btn {
+  justify-self: end;
+  align-self: start;
+  width: 2rem;
+  height: 2rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--slate-500);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.notification-delete-btn:hover {
+  background: rgba(236, 40, 42, 0.1);
+  color: var(--danger);
+}
+
+.info-card.activity-card {
+  position: relative;
+  padding-right: 2.5rem;
+}
+
+.activity-dismiss-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.45rem;
+  width: 2rem;
+  height: 2rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--slate-500);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.activity-dismiss-btn:hover {
+  background: rgba(236, 40, 42, 0.08);
+  color: var(--danger);
 }
 
 .outcome-actions {
@@ -1286,12 +1339,44 @@ textarea {
 .sidebar-profile {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-rows: auto auto;
   align-items: start;
-  gap: 0.78rem;
+  column-gap: 0.78rem;
+  row-gap: 0.5rem;
   margin-bottom: 1.1rem;
 }
 
+.sidebar-profile-text {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  text-align: left;
+  justify-self: stretch;
+  align-self: center;
+}
+
+.sidebar-profile-text h3 {
+  text-align: left;
+}
+
+/* Email, role, tagline: align with menu button label inset (buttons use padding-left ~1rem). */
+.sidebar-profile-details {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+  width: 100%;
+  text-align: left;
+  padding-left: 1rem;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+}
+
 .sidebar-avatar-wrap {
+  grid-column: 1;
+  grid-row: 1;
   width: 42px;
   height: 42px;
   border-radius: 999px;
@@ -1317,17 +1402,34 @@ textarea {
 }
 
 .sidebar-meta {
-  margin: 0.55rem 0 1rem;
+  margin: 0.35rem 0 0.85rem;
   color: rgba(255, 255, 255, 0.75);
   font-size: 0.9rem;
   line-height: 1.45;
 }
 
-#sidebarUserMeta {
-  margin: 0.18rem 0 0;
+#sidebarUserEmail,
+#sidebarUserRole {
+  margin: 0;
   line-height: 1.45;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  text-align: left;
+  /* Prefer breaking at word boundaries; avoid splitting the address mid-token when possible */
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+#sidebarUserEmail {
+  margin-top: 0;
+}
+
+#sidebarUserRole {
+  margin-top: 0.12rem;
+  opacity: 0.92;
+}
+
+.sidebar-profile-details #sidebarRoleDesc {
+  margin: 0;
+  text-align: left;
 }
 
 .menu {
@@ -1429,6 +1531,14 @@ textarea,
 
 .panel-header p {
   margin: 0.25rem 0 0;
+}
+
+.panel-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .section-title {
@@ -1999,8 +2109,10 @@ body.dark-mode #viewRoot .panel-header h3 {
   color: #ffffff;
 }
 
-.sidebar #sidebarUserMeta {
+.sidebar #sidebarUserEmail,
+.sidebar #sidebarUserRole {
   color: rgba(255, 255, 255, 0.78);
+  font-size: 0.82rem;
 }
 
 /* Auth panel headings: always light on the navy auth background. */
@@ -2380,24 +2492,30 @@ table tbody tr:last-child td {
   opacity: 0.85;
 }
 
-/* ---------- Sidebar polish ---------- */
-.sidebar {
-  position: sticky;
-  top: max(0.75rem, env(safe-area-inset-top));
-  width: 260px;
-  flex-shrink: 0;
-  align-self: stretch;
-  /* Isolate the sidebar's layout so re-rendering menu buttons or animating
-     the main view never shifts the sidebar's position or width. */
-  contain: layout style;
-  background:
-    radial-gradient(140% 80% at 100% 0%, rgba(255, 255, 255, 0.08), transparent 55%),
-    linear-gradient(180deg, var(--blue-950) 0%, var(--blue-900) 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 18px 50px rgba(40, 57, 113, 0.18);
-  overflow-x: hidden;
-  overflow-y: auto;
+/* ---------- Sidebar polish (desktop column only) ----------
+   The mobile drawer uses position:fixed in @media (max-width: 900px). Those
+   rules must win; an unscoped sticky rule here previously overrode fixed and
+   kept the sidebar in document flow with min-height:100dvh, leaving a huge
+   empty gap above the main panel on phones. */
+@media (min-width: 901px) {
+  .sidebar {
+    position: sticky;
+    top: max(0.75rem, env(safe-area-inset-top));
+    width: 260px;
+    flex-shrink: 0;
+    align-self: stretch;
+    /* Isolate the sidebar's layout so re-rendering menu buttons or animating
+       the main view never shifts the sidebar's position or width. */
+    contain: layout style;
+    background:
+      radial-gradient(140% 80% at 100% 0%, rgba(255, 255, 255, 0.08), transparent 55%),
+      linear-gradient(180deg, var(--blue-950) 0%, var(--blue-900) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 18px 50px rgba(40, 57, 113, 0.18);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
 }
 
 /* Lock the menu nav height so buttons re-rendering doesn't cause a flash. */
@@ -2431,11 +2549,6 @@ table tbody tr:last-child td {
 
 .sidebar-meta {
   color: rgba(255, 255, 255, 0.78);
-}
-
-#sidebarUserMeta {
-  color: rgba(255, 255, 255, 0.62);
-  font-size: 0.82rem;
 }
 
 .menu-btn {
@@ -3416,6 +3529,17 @@ body.dark-mode .notification-row.unread {
 body.dark-mode .notification-row .pill-unread {
   background: var(--gold-300);
   color: var(--xu-blue-1);
+}
+
+body.dark-mode .notification-delete-btn,
+body.dark-mode .activity-dismiss-btn {
+  color: #94a3b8;
+}
+
+body.dark-mode .notification-delete-btn:hover,
+body.dark-mode .activity-dismiss-btn:hover {
+  color: #fecaca;
+  background: rgba(248, 113, 113, 0.12);
 }
 
 /* ==========================================================================
