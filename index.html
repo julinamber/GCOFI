@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=gco2026-ui-21" />
+  <link rel="stylesheet" href="/style.css?v=gco2026-ui-23" />
 </head>
 <body>
   <a href="#appRoot" class="skip-link">Skip to main content</a>
@@ -147,9 +147,12 @@
             <img id="sidebarProfileImg" class="sidebar-avatar-img hidden" alt="User profile" />
             <div id="sidebarAvatarFallback" class="sidebar-avatar-fallback">U</div>
           </div>
-          <div>
+          <div class="sidebar-profile-text">
             <h3 id="roleDashboardLabel"></h3>
-            <p id="sidebarUserMeta" class="muted tiny"></p>
+          </div>
+          <div class="sidebar-profile-details">
+            <p id="sidebarUserEmail" class="muted tiny sidebar-user-email"></p>
+            <p id="sidebarUserRole" class="muted tiny sidebar-user-role"></p>
             <p id="sidebarRoleDesc" class="sidebar-meta"></p>
           </div>
         </div>
@@ -162,7 +165,7 @@
   </template>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="/script.js?v=gco2026-ui-19"></script>
+<script src="/script.js?v=gco2026-ui-24"></script>
 </body>
 
 </html>
