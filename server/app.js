@@ -29,6 +29,16 @@ const sheetsRoutes = require("./routes/sheets");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const INDEX_HTML_PATH = path.join(PROJECT_ROOT, "index.html");
+
+/** Avoid stale SPA shell: browsers often cache index.html via ETag/304 unless disabled. */
+function sendIndexHtml(res) {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.sendFile(INDEX_HTML_PATH, { etag: false, lastModified: false });
+}
+
 // Required for secure cookies behind reverse proxies (Render, Nginx, etc.)
 app.set("trust proxy", 1);
 
@@ -84,12 +94,12 @@ app.get("/api/health", (_req, res) => {
 
 app.get("/", (req, res) => {
   if (req.isAuthenticated()) return res.redirect("/dashboard");
-  res.sendFile(path.join(PROJECT_ROOT, "index.html"));
+  sendIndexHtml(res);
 });
 
 /** SPA: any /dashboard or /dashboard/role/section serves the same shell */
-app.get(/^\/dashboard(\/.*)?$/, (req, res) => {
-  res.sendFile(path.join(PROJECT_ROOT, "index.html"));
+app.get(/^\/dashboard(\/.*)?$/, (_req, res) => {
+  sendIndexHtml(res);
 });
 
 /** Old Google setup page was removed; bookmarks still hit this URL. */
@@ -112,6 +122,16 @@ app.get("/auth/logout", (req, res) => {
   });
 });
 
+/** API before static files so DELETE/POST under /api never hit serve-static edge cases. */
+app.use("/api/auth", authRoutes);
+app.use("/api/appointments", appointmentRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/counselor", counselorRoutes);
+app.use("/api/utility", utilityRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/import", importRoutes);
+app.use("/api/sheets", sheetsRoutes);
+
 app.use(
   express.static(PROJECT_ROOT, {
     setHeaders(res, filePath) {
@@ -123,15 +143,6 @@ app.use(
     }
   })
 );
-
-app.use("/api/auth", authRoutes);
-app.use("/api/appointments", appointmentRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/counselor", counselorRoutes);
-app.use("/api/utility", utilityRoutes);
-app.use("/api/notifications", notificationRoutes);
-app.use("/api/import", importRoutes);
-app.use("/api/sheets", sheetsRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error(err);
