@@ -61,6 +61,7 @@ const PROFILE_RULES = [
       windows: [
         { start: "08:15", end: "09:35" },
         { start: "01:00", end: "03:00" }
+      ]
     }
   },
   {
