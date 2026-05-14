@@ -58,7 +58,9 @@ const PROFILE_RULES = [
       services: [...BOBBY_SERVICES],
       sessionMinutes: 40,
       slotStepMinutes: 15,
-      windows: [{ start: "08:15", end: "08:55" }]
+      windows: [
+        { start: "08:15", end: "09:35" }
+        { start: "01:00", end: "03:00" }
     }
   },
   {
@@ -68,7 +70,7 @@ const PROFILE_RULES = [
       sessionMinutes: 60,
       slotStepMinutes: 60,
       windows: [
-        { start: "08:00", end: "12:00" },
+        { start: "08:00", end: "11:00" },
         { start: "13:00", end: "15:00" }
       ]
     }
@@ -80,7 +82,7 @@ const PROFILE_RULES = [
       sessionMinutes: 60,
       slotStepMinutes: 60,
       windows: [
-        { start: "08:00", end: "12:00" },
+        { start: "08:00", end: "11:00" },
         { start: "13:00", end: "16:00" }
       ]
     }
